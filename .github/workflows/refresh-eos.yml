@@ -1,0 +1,40 @@
+name: Refresh Windows EOS data
+
+on:
+  schedule:
+    - cron: '17 6 1 * *'   # 06:17 UTC on the 1st of every month
+  workflow_dispatch:        # adds a "Run workflow" button for manual runs
+
+permissions:
+  contents: write           # lets the job commit the updated file
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Download and validate
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 https://endoflife.date/api/windows.json -o /tmp/windows.json
+
+          # Refuse to publish anything that doesn't look right; the last good file stays in place
+          jq -e 'type == "array" and length > 20' /tmp/windows.json > /dev/null
+          for c in 11-24h2-w 11-24h2-e 11-25h2-w 11-25h2-e; do
+            jq -e --arg c "$c" 'map(select(.cycle == $c and (.eol | type) == "string")) | length == 1' /tmp/windows.json > /dev/null \
+              || { echo "Missing or malformed cycle $c"; exit 1; }
+          done
+
+          mkdir -p eos
+          jq '.' /tmp/windows.json > eos/windows.json
+          date -u +%Y-%m-%dT%H:%M:%SZ > eos/last-checked.txt
+
+      - name: Commit if anything changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add eos/
+          git commit -m "Refresh Windows EOS data $(date -u +%Y-%m-%d)" || echo "No changes"
+          git push
